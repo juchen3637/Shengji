@@ -1,71 +1,78 @@
-import { useEffect, useState } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, Share } from 'react-native';
+import { useEffect, useState, useRef } from 'react';
+import { View, Text, TouchableOpacity, StyleSheet, Share, Alert } from 'react-native';
 import { useLocalSearchParams, router } from 'expo-router';
-
-interface Player { id: string; name: string; }
+import { connectSocket } from '../lib/socket/client';
+import { useGame, RoomPlayer } from '../lib/socket/useGame';
 
 export default function LobbyScreen() {
-  const { mode, name, roomId } = useLocalSearchParams<{ mode: string; name: string; roomId: string }>();
-  const [players, setPlayers] = useState<Player[]>([]);
-  const [myRoomId, setMyRoomId] = useState(roomId ?? '');
-  const [connected, setConnected] = useState(false);
+  const { mode, name, roomId: paramRoomId } = useLocalSearchParams<{ mode: string; name: string; roomId?: string }>();
+  const [players, setPlayers] = useState<RoomPlayer[]>([]);
+  const [myRoomId, setMyRoomId] = useState('');
+  const [connecting, setConnecting] = useState(true);
+  const myPlayerIdRef = useRef('');
+  const { createRoom, joinRoom, fillWithBots, startGame } = useGame();
 
-  // Placeholder: will be wired to Socket.io in Phase 4
   useEffect(() => {
-    // Simulate self joining
-    setPlayers([{ id: '1', name: name ?? 'You' }]);
-    setConnected(true);
-    if (mode === 'create') {
-      setMyRoomId('X7K2PQ'); // placeholder until server wired
-    }
+    const socket = connectSocket();
+
+    socket.on('room_update', (data: { roomId: string; players: RoomPlayer[] }) => {
+      setPlayers(data.players);
+    });
+
+    socket.on('game_started', () => {
+      router.replace({ pathname: '/game', params: { roomId: myRoomId, name, playerId: myPlayerIdRef.current } });
+    });
+
+    (async () => {
+      try {
+        const fn = mode === 'create' ? createRoom(name ?? 'Player') : joinRoom(paramRoomId ?? '', name ?? 'Player');
+        const { roomId, playerId } = await fn;
+        myPlayerIdRef.current = playerId;
+        setMyRoomId(roomId);
+      } catch (e: any) {
+        Alert.alert('Connection Error', e.message);
+      } finally {
+        setConnecting(false);
+      }
+    })();
+
+    return () => { socket.off('room_update'); socket.off('game_started'); };
   }, []);
 
-  const seats = [0, 1, 2, 3];
-  const teamLabels = ['Team A', 'Team B', 'Team A', 'Team B'];
   const positions = ['Bottom (You)', 'Right', 'Top (Partner)', 'Left'];
-
-  const handleShare = () => {
-    Share.share({ message: `Join my Shengji game! Room code: ${myRoomId}` });
-  };
-
-  const handleStart = () => {
-    router.push({ pathname: '/game', params: { roomId: myRoomId, name } });
-  };
+  const teamLabels = ['Team A', 'Team B', 'Team A', 'Team B'];
 
   return (
     <View style={styles.container}>
       <Text style={styles.title}>Game Lobby</Text>
-
       <View style={styles.roomCodeBox}>
         <Text style={styles.roomCodeLabel}>Room Code</Text>
-        <Text style={styles.roomCode}>{myRoomId || '------'}</Text>
-        <TouchableOpacity onPress={handleShare}>
+        <Text style={styles.roomCode}>{connecting ? '......' : myRoomId}</Text>
+        <TouchableOpacity onPress={() => Share.share({ message: `Join my Shengji game! Code: ${myRoomId}` })}>
           <Text style={styles.shareBtn}>Share →</Text>
         </TouchableOpacity>
       </View>
-
       <View style={styles.seats}>
-        {seats.map(i => (
-          <View key={i} style={[styles.seat, players[i] && styles.seatFilled]}>
-            <Text style={styles.seatPosition}>{positions[i]}</Text>
-            <Text style={styles.seatName}>{players[i]?.name ?? 'Waiting...'}</Text>
+        {[0,1,2,3].map(i => (
+          <View key={i} style={[styles.seat, players[i] && styles.seatFilled, players[i]?.isBot && styles.seatBot]}>
+            <Text style={styles.seatPos}>{positions[i]}</Text>
+            <Text style={styles.seatName}>{players[i] ? (players[i].isBot ? `🤖 ${players[i].name}` : players[i].name) : 'Waiting...'}</Text>
             <Text style={styles.seatTeam}>{teamLabels[i]}</Text>
           </View>
         ))}
       </View>
-
-      <Text style={styles.playerCount}>{players.length}/4 players</Text>
-
+      <Text style={styles.count}>{players.length}/4 players</Text>
       {mode === 'create' && (
-        <TouchableOpacity
-          style={[styles.startBtn, players.length < 2 && styles.startBtnDisabled]}
-          onPress={handleStart}
-          disabled={players.length < 2}
-        >
-          <Text style={styles.startBtnText}>
-            {players.length < 2 ? 'Waiting for players...' : 'Start Game'}
-          </Text>
-        </TouchableOpacity>
+        <View style={styles.actions}>
+          {players.length < 4 && (
+            <TouchableOpacity style={styles.botBtn} onPress={() => fillWithBots(myRoomId).catch(e => Alert.alert('Error', e.message))}>
+              <Text style={styles.botBtnText}>🤖 Fill with Bots</Text>
+            </TouchableOpacity>
+          )}
+          <TouchableOpacity style={[styles.startBtn, players.length < 2 && styles.startBtnOff]} onPress={() => startGame(myRoomId).catch(e => Alert.alert('Error', e.message))} disabled={players.length < 2}>
+            <Text style={styles.startBtnText}>{players.length < 2 ? 'Need 2+ players' : 'Start Game'}</Text>
+          </TouchableOpacity>
+        </View>
       )}
     </View>
   );
@@ -81,11 +88,15 @@ const styles = StyleSheet.create({
   seats: { gap: 10 },
   seat: { backgroundColor: '#0e3d23', borderRadius: 10, padding: 14, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', borderWidth: 1, borderColor: '#1f5e38' },
   seatFilled: { borderColor: '#ffd700' },
-  seatPosition: { color: '#6aaf88', fontSize: 12, width: 100 },
+  seatBot: { borderColor: '#4fc3f7' },
+  seatPos: { color: '#6aaf88', fontSize: 12, width: 100 },
   seatName: { color: '#fff', fontWeight: '600', flex: 1, textAlign: 'center' },
   seatTeam: { color: '#a0e0b0', fontSize: 12, width: 60, textAlign: 'right' },
-  playerCount: { color: '#a0e0b0', textAlign: 'center', marginTop: 16, fontSize: 14 },
-  startBtn: { backgroundColor: '#ffd700', borderRadius: 10, padding: 16, alignItems: 'center', marginTop: 24 },
-  startBtnDisabled: { backgroundColor: '#3a6b50', opacity: 0.6 },
+  count: { color: '#a0e0b0', textAlign: 'center', marginTop: 16, fontSize: 14 },
+  actions: { gap: 10, marginTop: 24 },
+  botBtn: { backgroundColor: '#0e3d23', borderRadius: 10, padding: 14, alignItems: 'center', borderWidth: 1, borderColor: '#4fc3f7' },
+  botBtnText: { color: '#4fc3f7', fontWeight: '600', fontSize: 15 },
+  startBtn: { backgroundColor: '#ffd700', borderRadius: 10, padding: 16, alignItems: 'center' },
+  startBtnOff: { backgroundColor: '#3a6b50', opacity: 0.6 },
   startBtnText: { fontWeight: 'bold', fontSize: 16, color: '#1a3d22' },
 });

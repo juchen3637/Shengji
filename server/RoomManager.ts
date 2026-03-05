@@ -49,6 +49,20 @@ export class RoomManager {
     return null;
   }
 
+  addBot(roomId: string): { success: boolean; error?: string } {
+    const room = this.rooms.get(roomId);
+    if (!room) return { success: false, error: 'Room not found' };
+    if (room.players.length >= 4) return { success: false, error: 'Room is full' };
+    if (room.gameState) return { success: false, error: 'Game in progress' };
+    const seatIndex = room.players.length;
+    const playerId = `bot_${seatIndex}`;
+    const botNames = ['Bot East', 'Bot North', 'Bot West'];
+    const name = botNames[seatIndex - 1] ?? `Bot ${seatIndex}`;
+    room.players.push({ socketId: `bot_socket_${seatIndex}`, playerId, name, roomId });
+    console.log(`[Room] Added ${name} to room ${roomId} (${room.players.length}/4)`);
+    return { success: true };
+  }
+
   // Clean up rooms older than 2 hours with no game
   cleanup(): void {
     const cutoff = Date.now() - 2 * 60 * 60 * 1000;
