@@ -103,6 +103,20 @@ io.on('connection', (socket) => {
     callback?.({ success: true });
   });
 
+  socket.on('fill_with_bots', (roomId: string, callback: Function) => {
+    const room = roomManager.getRoom(roomId);
+    if (!room) return callback?.({ success: false, error: 'Room not found' });
+    while (room.players.length < 4) {
+      roomManager.addBot(roomId);
+    }
+    io.to(roomId).emit('room_update', {
+      roomId,
+      players: room.players.map(p => ({ id: p.playerId, name: p.name, isBot: p.playerId.startsWith('bot_') })),
+      playerCount: room.players.length,
+    });
+    callback?.({ success: true });
+  });
+
   // Handle disconnect
   socket.on('disconnect', () => {
     console.log(`[Socket] Disconnected: ${socket.id}`);
